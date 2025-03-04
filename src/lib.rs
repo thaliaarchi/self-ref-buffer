@@ -197,16 +197,16 @@ pub struct BufPair<T> {
 }
 
 impl<T> BufPair<T> {
-    pub fn new<R: Read, F>(reader: &mut SharedReader<R>, make: F) -> Self
+    pub fn new<R: Read, F, E>(reader: &mut SharedReader<R>, make: F) -> Result<Self, E>
     where
-        F: for<'a> FnOnce(&'a BufBuilder<'_, R>) -> T,
+        F: for<'a> FnOnce(&'a BufBuilder<'_, R>) -> Result<T, E>,
     {
         let builder = BufBuilder::new(reader);
-        let dependent = make(&builder);
-        BufPair {
+        let dependent = make(&builder)?;
+        Ok(BufPair {
             dependent,
             owner: builder.bufs.into_inner(),
-        }
+        })
     }
 
     pub fn dependent(&self) -> &T {
@@ -269,6 +269,32 @@ mod tests {
             let len = buf.len().min(self.limit);
             self.reader.read(&mut buf[..len])
         }
+    }
+
+    #[test]
+    fn self_ref() {
+        let s = "Lorem ipsum dolor sit amet,
+consectetur adipiscing elit,
+sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.";
+        let mut b = LimitReader::new(s.as_bytes(), 8);
+        let mut r = SharedReader::new(&mut b, 100);
+
+        let lines = BufPair::new(&mut r, |builder| -> io::Result<_> {
+            let mut lines = Vec::new();
+            loop {
+                let line = builder.read_line()?;
+                if line.is_empty() {
+                    break;
+                }
+                lines.push(utf8(line));
+            }
+            // Does not compile: lifetime may not live long enough
+            Ok(lines)
+        })
+        .unwrap();
+        assert_eq!(lines.dependent(), &s.lines().collect::<Vec<_>>());
     }
 
     #[test]
