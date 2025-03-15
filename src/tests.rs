@@ -21,30 +21,45 @@ impl<R: Read> Read for LimitReader<R> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Ident<'a> {
+    author: &'a [u8],
+    committer: &'a [u8],
+}
+
 #[test]
 fn self_ref() {
-    let s = "Lorem ipsum dolor sit amet,
-consectetur adipiscing elit,
-sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
-
-Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.";
+    let s = "author: Author
+committer: Committer";
     let mut b = LimitReader::new(s.as_bytes(), 8);
     let mut r = SharedReader::new(&mut b, 100);
 
-    let lines = BufPair::new(&mut r, |builder| -> io::Result<_> {
-        let mut lines = Vec::new();
-        loop {
-            let line = builder.read_line()?;
-            if line.is_empty() {
-                break;
-            }
-            lines.push(utf8(line));
-        }
+    let ident = BufPair::new(&mut r, |builder| -> io::Result<_> {
+        let author = strip_lf(builder.read_line()?);
+        let Some(author) = author.strip_prefix(b"author: ") else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "expected author directive",
+            ));
+        };
+        let committer = strip_lf(builder.read_line()?);
+        let Some(committer) = committer.strip_prefix(b"committer: ") else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "expected committer directive",
+            ));
+        };
         // Does not compile: lifetime may not live long enough
-        Ok(lines)
+        Ok(Ident { author, committer })
     })
     .unwrap();
-    assert_eq!(lines.dependent(), &s.lines().collect::<Vec<_>>());
+    assert_eq!(
+        ident.dependent(),
+        &Ident {
+            author: b"Author",
+            committer: b"Committer"
+        }
+    );
 }
 
 #[test]
@@ -90,4 +105,8 @@ fn utf8(s: &[u8]) -> &str {
         Cow::Borrowed(s) => s,
         Cow::Owned(lossy) => panic!("not UTF-8: {lossy:?} ({s:?})"),
     }
+}
+
+fn strip_lf(line: &[u8]) -> &[u8] {
+    line.strip_suffix(b"\n").unwrap_or(line)
 }
